@@ -3,16 +3,72 @@ import { EXAM_VERSIONS } from './constants';
 import { AnswersState, Question, QuestionType, TaskSection, ExamPageData, AnalysisResult } from './types';
 import Timer from './components/Timer';
 import ThreeDCard from './components/ThreeDCard';
-import { ArrowRight, ArrowLeft, CheckCircle, Save, BookOpen, PenTool, Layout, Check, Layers, User, Star, AlertTriangle, RefreshCw, XCircle } from 'lucide-react';
+import { ArrowRight, ArrowLeft, CheckCircle, Save, BookOpen, PenTool, Layout, Check, Layers, User, Star, AlertTriangle, RefreshCw, XCircle, Lock } from 'lucide-react';
 
 const TOTAL_TIME = 70 * 60; // 70 minutes
+const PASSING_THRESHOLD = 95; // Percent needed to unlock next version
 
-// ------------------- ALGORITHM -------------------
+// ------------------- WRITING ALGORITHM -------------------
+
+const LINKING_WORDS = ['however', 'although', 'despite', 'in spite of', 'but', 'because', 'so', 'therefore', 'furthermore', 'on the other hand'];
+
+const TOPIC_VOCAB = {
+    'vA-writing-1': ['distract', 'cheat', 'safety', 'emergency', 'dictionary', 'search', 'learn', 'allow', 'ban', 'focus'], // Mobile Phones
+    'vB-writing-1': ['convenient', 'delivery', 'price', 'cheap', 'expensive', 'crowd', 'queue', 'try on', 'touch', 'return'], // Shopping
+    // Fallback for C, D, E using A/B patterns if IDs recur
+};
+
+interface WritingFeedback {
+    pass: boolean;
+    feedback: string[];
+}
+
+const evaluateWriting = (questionId: string, text: string): WritingFeedback => {
+    const feedback: string[] = [];
+    const cleanText = text.trim();
+    
+    // 1. Length Check (Target 80-100, allow 60-150 tolerance)
+    const wordCount = cleanText.split(/\s+/).length;
+    if (wordCount < 60) feedback.push(`Too short (${wordCount} words). Aim for 80-100.`);
+    
+    // 2. Linking Words Check
+    const lowerText = cleanText.toLowerCase();
+    const foundLinkers = LINKING_WORDS.filter(w => lowerText.includes(w));
+    if (foundLinkers.length < 3) feedback.push(`Use more linking words (e.g., however, although, because). Found: ${foundLinkers.length}.`);
+
+    // 3. Topic Vocabulary Check
+    const keywords = TOPIC_VOCAB[questionId as keyof typeof TOPIC_VOCAB] || [];
+    if (keywords.length > 0) {
+        const foundKeywords = keywords.filter(w => lowerText.includes(w));
+        if (foundKeywords.length < 2) feedback.push(`Use more topic vocabulary. Try words like: ${keywords.slice(0, 4).join(', ')}.`);
+    }
+
+    // 4. Mechanics (Basic Capitalization check)
+    if (cleanText.length > 0 && cleanText[0] !== cleanText[0].toUpperCase()) {
+        feedback.push("Start sentences with capital letters.");
+    }
+
+    const pass = feedback.length === 0;
+    return { pass, feedback };
+};
+
+// ------------------- GRADING ALGORITHM -------------------
+
+// Global variable to store latest writing feedback for UI display
+let lastWritingFeedback: Record<string, string[]> = {};
+
 const checkAnswer = (question: Question, userAnswer: string): boolean => {
     if (!userAnswer) return false;
     
-    // Writing tasks are manually reviewed or assumed passed for the sake of the automated loop to prevent blocking
-    if (question.type === QuestionType.WRITING) return true;
+    // --- WRITING ANALYSIS ---
+    if (question.type === QuestionType.WRITING) {
+        const result = evaluateWriting(question.id, userAnswer);
+        if (!result.pass) {
+            lastWritingFeedback[question.id] = result.feedback;
+            return false;
+        }
+        return true;
+    }
 
     const normalize = (str: string) => {
         return str.trim().toLowerCase()
@@ -50,6 +106,9 @@ const analyzeExam = (answers: AnswersState, questions: Question[]): AnalysisResu
     let score = 0;
     const mistakes: string[] = [];
     const total = questions.length;
+    
+    // Reset writing feedback container for this run
+    lastWritingFeedback = {};
 
     questions.forEach(q => {
         if (checkAnswer(q, answers[q.id] || '')) {
@@ -61,8 +120,9 @@ const analyzeExam = (answers: AnswersState, questions: Question[]): AnalysisResu
 
     const percentage = Math.round((score / total) * 100);
     let feedback = "";
-    if (percentage >= 90) feedback = "Outstanding Mastery! You are ready.";
-    else if (percentage >= 75) feedback = "Great job! Just a few small errors.";
+    if (percentage >= 95) feedback = "Outstanding Mastery! You have unlocked the next version.";
+    else if (percentage >= 90) feedback = "Excellent work, but you need 95% to unlock the next level.";
+    else if (percentage >= 75) feedback = "Good job! Fix the errors to improve.";
     else if (percentage >= 50) feedback = "Good effort. Review the mistakes below.";
     else feedback = "You need more practice. Let's fix these errors together.";
 
@@ -72,6 +132,16 @@ const analyzeExam = (answers: AnswersState, questions: Question[]): AnalysisResu
 // ------------------- COMPONENT -------------------
 
 export default function App() {
+  // Load unlocked versions from localStorage
+  const [unlockedVersions, setUnlockedVersions] = useState<string[]>(() => {
+      try {
+          const saved = localStorage.getItem('oxford_unlocked');
+          return saved ? JSON.parse(saved) : ['A'];
+      } catch {
+          return ['A'];
+      }
+  });
+
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
   const [currentPageIdx, setCurrentPageIdx] = useState(0);
@@ -89,12 +159,30 @@ export default function App() {
     setAnswers(prev => ({ ...prev, [id]: value }));
   };
 
+  const unlockNextVersion = (currentVer: string) => {
+      const versions = ['A', 'B', 'C', 'D', 'E'];
+      const idx = versions.indexOf(currentVer);
+      if (idx !== -1 && idx < versions.length - 1) {
+          const nextVer = versions[idx + 1];
+          if (!unlockedVersions.includes(nextVer)) {
+              const newUnlocked = [...unlockedVersions, nextVer];
+              setUnlockedVersions(newUnlocked);
+              localStorage.setItem('oxford_unlocked', JSON.stringify(newUnlocked));
+          }
+      }
+  };
+
   const handleFinish = () => {
     setFinished(true);
     // Gather all questions
     const allQuestions = (EXAM_VERSIONS[selectedVersion!] || []).flatMap(page => page.tasks.flatMap(t => t.questions));
     const result = analyzeExam(answers, allQuestions);
     setAnalysis(result);
+
+    // Check unlocking
+    if (result.percentage >= PASSING_THRESHOLD && selectedVersion) {
+        unlockNextVersion(selectedVersion);
+    }
   };
 
   const startRemediation = () => {
@@ -102,9 +190,15 @@ export default function App() {
     setMistakeQueue([...analysis.mistakes]);
     setRemediationMode(true);
     setCurrentMistakeIdx(0);
-    // Clear answers for mistakes so user has to type them again
+    // Clear answers for mistakes so user has to type them again, 
+    // BUT preserve writing text so they can edit it instead of rewrite from scratch
     const newAnswers = { ...answers };
-    analysis.mistakes.forEach(id => delete newAnswers[id]);
+    analysis.mistakes.forEach(id => {
+        // If it is NOT a writing task, clear it. If it IS writing, keep it for editing.
+        if (!id.includes('writing')) {
+            delete newAnswers[id];
+        }
+    });
     setAnswers(newAnswers);
   };
 
@@ -120,14 +214,25 @@ export default function App() {
             alert("Congratulations! You have corrected all mistakes.");
             setRemediationMode(false);
             setFinished(true);
+            
             // Re-analyze
             const newResult = analyzeExam(answers, allQuestions);
             setAnalysis(newResult);
+            
+            // Re-check unlocking logic after remediation
+            if (newResult.percentage >= PASSING_THRESHOLD && selectedVersion) {
+                unlockNextVersion(selectedVersion);
+            }
         } else {
             setCurrentMistakeIdx(0); // Go to next
         }
     } else {
-        alert("Still incorrect. Try again!");
+        // Prepare error message
+        let msg = "Incorrect. Try again!";
+        if (q?.type === QuestionType.WRITING && lastWritingFeedback[qId]) {
+            msg = "Writing Issues:\n" + lastWritingFeedback[qId].map(s => "- " + s).join("\n");
+        }
+        alert(msg);
     }
   }
 
@@ -137,7 +242,6 @@ export default function App() {
   if (!selectedVersion) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#0f172a] text-white p-4 bg-grid overflow-hidden relative font-[Outfit]">
-        {/* ... (Same as before) ... */}
         <div className="absolute top-0 left-0 w-full h-full pointer-events-none">
              <div className="absolute top-20 left-20 w-72 h-72 bg-purple-600/20 rounded-full blur-[100px] animate-float"></div>
              <div className="absolute bottom-20 right-20 w-96 h-96 bg-blue-600/20 rounded-full blur-[100px] animate-float" style={{animationDelay: '2s'}}></div>
@@ -151,14 +255,34 @@ export default function App() {
                 </div>
              </div>
              <h1 className="text-5xl font-extrabold text-white mb-2 tracking-tight">Select Exam Version</h1>
-             <p className="text-slate-400 mb-10 text-lg">Please choose the exam version assigned by your teacher.</p>
+             <p className="text-slate-400 mb-10 text-lg">You must score 95% on Version A to unlock Version B, and so on.</p>
              <div className="flex flex-wrap justify-center gap-6">
-                {['A', 'B', 'C', 'D', 'E'].map((ver) => (
-                    <button key={ver} onClick={() => setSelectedVersion(ver)} className="group relative flex flex-col items-center justify-center w-36 h-36 p-4 bg-slate-900/60 border border-slate-700/50 rounded-3xl hover:bg-indigo-600/20 hover:border-indigo-500 transition-all duration-300 hover:scale-110 hover:shadow-xl hover:shadow-indigo-500/20">
-                        <span className="text-4xl font-bold text-white mb-2 group-hover:scale-110 transition-transform">{ver}</span>
-                        <span className="text-xs text-slate-400 group-hover:text-indigo-200 uppercase tracking-wider font-semibold">Version</span>
-                    </button>
-                ))}
+                {['A', 'B', 'C', 'D', 'E'].map((ver) => {
+                    const isUnlocked = unlockedVersions.includes(ver);
+                    return (
+                        <button 
+                            key={ver} 
+                            onClick={() => isUnlocked ? setSelectedVersion(ver) : null} 
+                            disabled={!isUnlocked}
+                            className={`
+                                group relative flex flex-col items-center justify-center w-36 h-36 p-4 rounded-3xl transition-all duration-300
+                                ${isUnlocked 
+                                    ? 'bg-slate-900/60 border border-slate-700/50 hover:bg-indigo-600/20 hover:border-indigo-500 hover:scale-110 hover:shadow-xl hover:shadow-indigo-500/20 cursor-pointer' 
+                                    : 'bg-slate-900/30 border border-slate-800 opacity-50 cursor-not-allowed grayscale'
+                                }
+                            `}
+                        >
+                            {isUnlocked ? (
+                                <>
+                                    <span className="text-4xl font-bold text-white mb-2 group-hover:scale-110 transition-transform">{ver}</span>
+                                    <span className="text-xs text-slate-400 group-hover:text-indigo-200 uppercase tracking-wider font-semibold">Version</span>
+                                </>
+                            ) : (
+                                <Lock className="w-10 h-10 text-slate-600" />
+                            )}
+                        </button>
+                    )
+                })}
              </div>
           </div>
         </ThreeDCard>
@@ -170,7 +294,7 @@ export default function App() {
   if (!started) {
      return (
       <div className="min-h-screen flex items-center justify-center bg-[#0f172a] text-white p-4 bg-grid overflow-hidden relative font-[Outfit]">
-        {/* ... (Same as before) ... */}
+        {/* ... (Background) ... */}
         <div className="absolute top-0 left-0 w-full h-full pointer-events-none">
              <div className="absolute top-20 left-20 w-72 h-72 bg-purple-600/20 rounded-full blur-[100px] animate-float"></div>
              <div className="absolute bottom-20 right-20 w-96 h-96 bg-blue-600/20 rounded-full blur-[100px] animate-float" style={{animationDelay: '2s'}}></div>
@@ -218,6 +342,7 @@ export default function App() {
       const allQuestions = (EXAM_VERSIONS[selectedVersion!] || []).flatMap(page => page.tasks.flatMap(t => t.questions));
       const currentQId = mistakeQueue[currentMistakeIdx];
       const question = allQuestions.find(q => q.id === currentQId);
+      const isWriting = question?.type === QuestionType.WRITING;
 
       if (!question) return <div>Loading...</div>;
 
@@ -231,6 +356,18 @@ export default function App() {
                      </div>
                      <p className="text-slate-300 mb-8">You must correct this answer to proceed. ({mistakeQueue.length} remaining)</p>
                      
+                     {/* Show specific Writing Algorithm feedback if available */}
+                     {isWriting && lastWritingFeedback[question.id] && (
+                         <div className="mb-6 p-4 bg-red-500/10 border border-red-500/50 rounded-xl">
+                            <h4 className="font-bold text-red-300 mb-2">Analysis Results:</h4>
+                            <ul className="list-disc list-inside space-y-1 text-slate-300">
+                                {lastWritingFeedback[question.id].map((f, i) => (
+                                    <li key={i}>{f}</li>
+                                ))}
+                            </ul>
+                         </div>
+                     )}
+
                      <div className="bg-slate-900/80 p-8 rounded-2xl border border-red-500/20 mb-8">
                         <QuestionItem 
                             question={question} 
@@ -254,6 +391,7 @@ export default function App() {
   // 4. Analysis / Finished Screen
   if (finished && analysis) {
     const allQuestions = (EXAM_VERSIONS[selectedVersion!] || []).flatMap(page => page.tasks.flatMap(t => t.questions));
+    const passed = analysis.percentage >= PASSING_THRESHOLD;
 
     return (
       <div className="min-h-screen bg-[#0f172a] text-white p-8 bg-grid font-[Outfit] pb-32">
@@ -261,7 +399,7 @@ export default function App() {
             {/* Header Card */}
             <ThreeDCard>
                 <div className="bg-slate-800/80 backdrop-blur-3xl border border-white/10 p-10 rounded-[2.5rem] text-center shadow-2xl relative overflow-hidden">
-                    <div className={`absolute top-0 left-0 w-full h-2 ${analysis.percentage >= 70 ? 'bg-emerald-500' : 'bg-amber-500'}`}></div>
+                    <div className={`absolute top-0 left-0 w-full h-2 ${passed ? 'bg-emerald-500' : 'bg-amber-500'}`}></div>
                     
                     <h2 className="text-4xl font-bold mb-2">Examination Results</h2>
                     <p className="text-slate-400 mb-8">Version {selectedVersion}</p>
@@ -282,6 +420,15 @@ export default function App() {
                         <p className="text-xl text-indigo-300 font-medium">"{analysis.feedback}"</p>
                     </div>
 
+                    {passed && (
+                        <div className="mt-8 p-4 bg-emerald-500/20 border border-emerald-500/50 rounded-xl inline-block">
+                             <div className="flex items-center gap-2 text-emerald-300 font-bold">
+                                <Lock className="w-5 h-5" />
+                                <span>Next Version Unlocked!</span>
+                             </div>
+                        </div>
+                    )}
+
                     {analysis.mistakes.length > 0 && (
                         <div className="mt-8">
                             <button 
@@ -301,8 +448,8 @@ export default function App() {
                 <h3 className="text-2xl font-bold text-slate-300 ml-4">Detailed Breakdown</h3>
                 {allQuestions.map((q, idx) => {
                     const isCorrect = !analysis.mistakes.includes(q.id);
-                    // Skip writing tasks in visual breakdown if needed, or show them as neutral
-                    if(q.type === QuestionType.WRITING) return null;
+                    const isWriting = q.type === QuestionType.WRITING;
+                    const writingErrors = isWriting && !isCorrect ? lastWritingFeedback[q.id] : [];
 
                     return (
                         <div key={q.id} className={`p-6 rounded-2xl border ${isCorrect ? 'bg-emerald-900/10 border-emerald-500/30' : 'bg-red-900/10 border-red-500/30'} flex flex-col md:flex-row gap-6 items-start md:items-center`}>
@@ -317,11 +464,19 @@ export default function App() {
                                         <span className="text-xs text-slate-500 block mb-1">Your Answer</span>
                                         <span className={`font-mono ${isCorrect ? 'text-emerald-300' : 'text-red-300'}`}>{answers[q.id] || '(Empty)'}</span>
                                     </div>
-                                    {!isCorrect && (
+                                    {!isCorrect && !isWriting && (
                                         <div className="bg-slate-900/50 p-3 rounded-lg border border-white/5">
                                             <span className="text-xs text-slate-500 block mb-1">Correct Answer</span>
                                             <span className="font-mono text-emerald-300">{q.correctAnswer}</span>
                                         </div>
+                                    )}
+                                    {!isCorrect && isWriting && writingErrors && (
+                                         <div className="bg-slate-900/50 p-3 rounded-lg border border-red-500/30">
+                                            <span className="text-xs text-red-400 block mb-1 font-bold">Feedback</span>
+                                            <ul className="list-disc list-inside text-sm text-red-200">
+                                                {writingErrors.map((err, i) => <li key={i}>{err}</li>)}
+                                            </ul>
+                                         </div>
                                     )}
                                 </div>
                             </div>
@@ -334,7 +489,7 @@ export default function App() {
     );
   }
 
-  // 5. Exam Interface (Same as before)
+  // 5. Exam Interface
   const currentExamPages: ExamPageData[] = EXAM_VERSIONS[selectedVersion] || [];
   const currentPage = currentExamPages[currentPageIdx];
 
