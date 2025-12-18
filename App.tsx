@@ -61,7 +61,7 @@ export default function App() {
                </div>
                <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-700/50">
                  <p className="text-slate-500 uppercase text-xs font-bold tracking-wider mb-1">Version</p>
-                 <p className="font-semibold text-white">Version C</p>
+                 <p className="font-semibold text-white">Version D</p>
                </div>
              </div>
 
