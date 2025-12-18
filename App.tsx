@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { EXAM_PAGES } from './constants';
-import { AnswersState, Question, QuestionType, TaskSection } from './types';
+import { EXAM_VERSIONS } from './constants';
+import { AnswersState, Question, QuestionType, TaskSection, ExamPageData } from './types';
 import Timer from './components/Timer';
 import ThreeDCard from './components/ThreeDCard';
-import { ArrowRight, ArrowLeft, CheckCircle, Save, BookOpen, PenTool, Layout, Check } from 'lucide-react';
+import { ArrowRight, ArrowLeft, CheckCircle, Save, BookOpen, PenTool, Layout, Check, Layers } from 'lucide-react';
 
 const TOTAL_TIME = 70 * 60; // 70 minutes
 
 export default function App() {
+  const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
   const [currentPageIdx, setCurrentPageIdx] = useState(0);
   const [answers, setAnswers] = useState<AnswersState>({});
@@ -16,10 +17,8 @@ export default function App() {
 
   // Auto-save logic (simulated)
   useEffect(() => {
-    const saved = localStorage.getItem('oxford_exam_state');
-    if (saved) {
-      // Restore logic could go here, but for this demo we start fresh or clear
-    }
+    // Clear state when reloading to force version select for this demo
+    // const saved = localStorage.getItem('oxford_exam_state');
   }, []);
 
   const handleAnswer = (id: string, value: string) => {
@@ -34,6 +33,46 @@ export default function App() {
 
   const currentProgress = (Object.keys(answers).length / 70) * 100; // Approx total questions
 
+  // 1. Version Selection Screen
+  if (!selectedVersion) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#0f172a] text-white p-4 bg-grid overflow-hidden relative">
+        <div className="absolute top-0 left-0 w-full h-full pointer-events-none">
+             <div className="absolute top-20 left-20 w-72 h-72 bg-purple-600/20 rounded-full blur-[100px] animate-float"></div>
+             <div className="absolute bottom-20 right-20 w-96 h-96 bg-blue-600/20 rounded-full blur-[100px] animate-float" style={{animationDelay: '2s'}}></div>
+        </div>
+        
+        <ThreeDCard>
+          <div className="max-w-4xl w-full bg-slate-800/50 backdrop-blur-2xl border border-slate-700 p-12 rounded-3xl shadow-2xl relative z-10 text-center">
+             <div className="mb-8 flex justify-center">
+                <div className="p-4 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl shadow-lg shadow-indigo-500/40">
+                    <Layers className="w-12 h-12 text-white" />
+                </div>
+             </div>
+             <h1 className="text-4xl font-extrabold text-white mb-2 font-[Outfit]">
+               Select Exam Version
+             </h1>
+             <p className="text-slate-400 mb-8">Please choose the exam version assigned by your teacher.</p>
+             
+             <div className="flex flex-wrap justify-center gap-4">
+                {['A', 'B', 'C', 'D', 'E'].map((ver) => (
+                    <button
+                        key={ver}
+                        onClick={() => setSelectedVersion(ver)}
+                        className="group relative flex flex-col items-center justify-center w-32 h-32 p-4 bg-slate-900/50 border border-slate-700 rounded-2xl hover:bg-indigo-600/20 hover:border-indigo-500 transition-all duration-300"
+                    >
+                        <span className="text-3xl font-bold text-white mb-2 group-hover:scale-110 transition-transform">{ver}</span>
+                        <span className="text-xs text-slate-400 group-hover:text-indigo-200">Version {ver}</span>
+                    </button>
+                ))}
+             </div>
+          </div>
+        </ThreeDCard>
+      </div>
+    )
+  }
+
+  // 2. Start Screen
   if (!started) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#0f172a] text-white p-4 bg-grid overflow-hidden relative">
@@ -61,23 +100,32 @@ export default function App() {
                </div>
                <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-700/50">
                  <p className="text-slate-500 uppercase text-xs font-bold tracking-wider mb-1">Version</p>
-                 <p className="font-semibold text-white">Version D</p>
+                 <p className="font-semibold text-white">Version {selectedVersion}</p>
                </div>
              </div>
 
-             <button 
-                onClick={() => setStarted(true)}
-                className="group relative inline-flex items-center justify-center px-8 py-4 font-bold text-white transition-all duration-200 bg-indigo-600 font-[Outfit] rounded-full hover:bg-indigo-700 hover:scale-105 focus:outline-none ring-offset-2 focus:ring-2 ring-indigo-400"
-             >
-                <span className="mr-2 text-lg">Start Examination</span>
-                <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-             </button>
+             <div className="flex flex-col gap-3">
+                <button 
+                    onClick={() => setStarted(true)}
+                    className="group relative inline-flex items-center justify-center px-8 py-4 font-bold text-white transition-all duration-200 bg-indigo-600 font-[Outfit] rounded-full hover:bg-indigo-700 hover:scale-105 focus:outline-none ring-offset-2 focus:ring-2 ring-indigo-400"
+                >
+                    <span className="mr-2 text-lg">Start Examination</span>
+                    <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                </button>
+                <button 
+                    onClick={() => setSelectedVersion(null)}
+                    className="text-sm text-slate-500 hover:text-indigo-400 transition-colors"
+                >
+                    Change Version
+                </button>
+             </div>
           </div>
         </ThreeDCard>
       </div>
     );
   }
 
+  // 3. Finished Screen
   if (finished) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#0f172a] text-white p-4 bg-grid">
@@ -100,6 +148,10 @@ export default function App() {
                          <span className="text-slate-400">Questions Answered</span>
                          <span className="text-white font-mono">{Object.keys(answers).length}</span>
                     </div>
+                    <div className="flex justify-between items-center mt-2 pt-2 border-t border-slate-700">
+                         <span className="text-slate-400">Version</span>
+                         <span className="text-white font-mono">{selectedVersion}</span>
+                    </div>
                 </div>
 
                 <button onClick={() => window.location.reload()} className="text-indigo-400 hover:text-indigo-300 underline">Return to Home</button>
@@ -109,7 +161,8 @@ export default function App() {
     );
   }
 
-  const currentPage = EXAM_PAGES[currentPageIdx];
+  const currentExamPages: ExamPageData[] = EXAM_VERSIONS[selectedVersion] || [];
+  const currentPage = currentExamPages[currentPageIdx];
 
   return (
     <div className="min-h-screen bg-[#0f172a] text-slate-200 font-[Outfit] pb-20 relative overflow-x-hidden selection:bg-indigo-500/30">
@@ -126,18 +179,19 @@ export default function App() {
       <div className="fixed top-0 left-0 w-full h-1 bg-slate-800 z-50">
         <div 
             className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500 ease-out shadow-[0_0_10px_rgba(99,102,241,0.5)]"
-            style={{ width: `${((currentPageIdx + 1) / EXAM_PAGES.length) * 100}%` }}
+            style={{ width: `${((currentPageIdx + 1) / currentExamPages.length) * 100}%` }}
         />
       </div>
 
       <div className="container mx-auto px-4 py-8 relative z-10 max-w-5xl">
         <div className="flex items-center justify-between mb-8">
             <div>
-                <h2 className="text-sm font-bold text-indigo-400 tracking-wider uppercase mb-1">Section {currentPageIdx + 1} of {EXAM_PAGES.length}</h2>
+                <h2 className="text-sm font-bold text-indigo-400 tracking-wider uppercase mb-1">Section {currentPageIdx + 1} of {currentExamPages.length}</h2>
                 <h1 className="text-3xl md:text-4xl font-extrabold text-white">{currentPage.title}</h1>
             </div>
             <div className="hidden md:block">
                  <div className="text-right text-xs text-slate-500 font-mono">ID: {currentPage.id}</div>
+                 <div className="text-right text-xs text-indigo-400 font-mono mt-1">Ver: {selectedVersion}</div>
             </div>
         </div>
 
@@ -182,7 +236,7 @@ export default function App() {
                 <ArrowLeft className="mr-2 w-5 h-5" /> Previous
             </button>
 
-            {currentPageIdx < EXAM_PAGES.length - 1 ? (
+            {currentPageIdx < currentExamPages.length - 1 ? (
                 <button
                     onClick={() => {
                         window.scrollTo(0,0);
