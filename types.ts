@@ -13,6 +13,7 @@ export interface Question {
   options?: string[]; // For MCQ or Dropdown
   parts?: string[]; // For split sentence inputs e.g. "While I [input]..."
   subPrompt?: string; // Example text or sub-instruction
+  correctAnswer?: string; // Pipe separated for multiple blanks, e.g. "was reading|rang"
 }
 
 export interface TaskSection {
@@ -30,4 +31,12 @@ export interface ExamPageData {
 
 export interface AnswersState {
   [key: string]: string;
+}
+
+export interface AnalysisResult {
+    score: number;
+    total: number;
+    percentage: number;
+    mistakes: string[]; // IDs of wrong answers
+    feedback: string;
 }

@@ -1,11 +1,75 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { EXAM_VERSIONS } from './constants';
-import { AnswersState, Question, QuestionType, TaskSection, ExamPageData } from './types';
+import { AnswersState, Question, QuestionType, TaskSection, ExamPageData, AnalysisResult } from './types';
 import Timer from './components/Timer';
 import ThreeDCard from './components/ThreeDCard';
-import { ArrowRight, ArrowLeft, CheckCircle, Save, BookOpen, PenTool, Layout, Check, Layers } from 'lucide-react';
+import { ArrowRight, ArrowLeft, CheckCircle, Save, BookOpen, PenTool, Layout, Check, Layers, User, Star, AlertTriangle, RefreshCw, XCircle } from 'lucide-react';
 
 const TOTAL_TIME = 70 * 60; // 70 minutes
+
+// ------------------- ALGORITHM -------------------
+const checkAnswer = (question: Question, userAnswer: string): boolean => {
+    if (!userAnswer) return false;
+    
+    // Writing tasks are manually reviewed or assumed passed for the sake of the automated loop to prevent blocking
+    if (question.type === QuestionType.WRITING) return true;
+
+    const normalize = (str: string) => {
+        return str.trim().toLowerCase()
+            .replace(/n't/g, ' not')
+            .replace(/'m/g, ' am')
+            .replace(/'re/g, ' are')
+            .replace(/'ll/g, ' will')
+            .replace(/'ve/g, ' have')
+            .replace(/\./g, '')
+            .replace(/\s+/g, ' '); // Collapse spaces
+    };
+
+    const cleanUser = normalize(userAnswer);
+    const cleanCorrect = normalize(question.correctAnswer || "");
+
+    // Simple Match
+    if (question.type === QuestionType.MCQ || question.type === QuestionType.DROPDOWN) {
+        return cleanUser === cleanCorrect;
+    }
+
+    // Complex Match (Fill Blank / Sentence)
+    if (question.type === QuestionType.FILL_BLANK || question.type === QuestionType.SENTENCE_BUILDER) {
+        const userParts = cleanUser.split('|').map(s => s.trim());
+        const correctParts = cleanCorrect.split('|').map(s => s.trim());
+
+        if (userParts.length !== correctParts.length) return false;
+
+        return userParts.every((u, i) => u === correctParts[i]);
+    }
+
+    return false;
+}
+
+const analyzeExam = (answers: AnswersState, questions: Question[]): AnalysisResult => {
+    let score = 0;
+    const mistakes: string[] = [];
+    const total = questions.length;
+
+    questions.forEach(q => {
+        if (checkAnswer(q, answers[q.id] || '')) {
+            score++;
+        } else {
+            mistakes.push(q.id);
+        }
+    });
+
+    const percentage = Math.round((score / total) * 100);
+    let feedback = "";
+    if (percentage >= 90) feedback = "Outstanding Mastery! You are ready.";
+    else if (percentage >= 75) feedback = "Great job! Just a few small errors.";
+    else if (percentage >= 50) feedback = "Good effort. Review the mistakes below.";
+    else feedback = "You need more practice. Let's fix these errors together.";
+
+    return { score, total, percentage, mistakes, feedback };
+};
+
+// ------------------- COMPONENT -------------------
 
 export default function App() {
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
@@ -14,55 +78,85 @@ export default function App() {
   const [answers, setAnswers] = useState<AnswersState>({});
   const [timeLeft, setTimeLeft] = useState(TOTAL_TIME);
   const [finished, setFinished] = useState(false);
-
-  // Auto-save logic (simulated)
-  useEffect(() => {
-    // Clear state when reloading to force version select for this demo
-    // const saved = localStorage.getItem('oxford_exam_state');
-  }, []);
+  
+  // Remediation State
+  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [remediationMode, setRemediationMode] = useState(false);
+  const [mistakeQueue, setMistakeQueue] = useState<string[]>([]);
+  const [currentMistakeIdx, setCurrentMistakeIdx] = useState(0);
 
   const handleAnswer = (id: string, value: string) => {
     setAnswers(prev => ({ ...prev, [id]: value }));
   };
 
-  const handleSubmit = () => {
-    if (window.confirm("Are you sure you want to finish the exam?")) {
-      setFinished(true);
-    }
+  const handleFinish = () => {
+    setFinished(true);
+    // Gather all questions
+    const allQuestions = (EXAM_VERSIONS[selectedVersion!] || []).flatMap(page => page.tasks.flatMap(t => t.questions));
+    const result = analyzeExam(answers, allQuestions);
+    setAnalysis(result);
   };
 
-  const currentProgress = (Object.keys(answers).length / 70) * 100; // Approx total questions
+  const startRemediation = () => {
+    if (!analysis) return;
+    setMistakeQueue([...analysis.mistakes]);
+    setRemediationMode(true);
+    setCurrentMistakeIdx(0);
+    // Clear answers for mistakes so user has to type them again
+    const newAnswers = { ...answers };
+    analysis.mistakes.forEach(id => delete newAnswers[id]);
+    setAnswers(newAnswers);
+  };
 
-  // 1. Version Selection Screen
+  const submitRemediationQuestion = (qId: string) => {
+    const allQuestions = (EXAM_VERSIONS[selectedVersion!] || []).flatMap(page => page.tasks.flatMap(t => t.questions));
+    const q = allQuestions.find(qt => qt.id === qId);
+    
+    if (q && checkAnswer(q, answers[qId] || '')) {
+        // Correct
+        const nextQueue = mistakeQueue.filter(id => id !== qId);
+        setMistakeQueue(nextQueue);
+        if (nextQueue.length === 0) {
+            alert("Congratulations! You have corrected all mistakes.");
+            setRemediationMode(false);
+            setFinished(true);
+            // Re-analyze
+            const newResult = analyzeExam(answers, allQuestions);
+            setAnalysis(newResult);
+        } else {
+            setCurrentMistakeIdx(0); // Go to next
+        }
+    } else {
+        alert("Still incorrect. Try again!");
+    }
+  }
+
+  // ------------------- VIEWS -------------------
+
+  // 1. Version Selection
   if (!selectedVersion) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#0f172a] text-white p-4 bg-grid overflow-hidden relative">
+      <div className="min-h-screen flex items-center justify-center bg-[#0f172a] text-white p-4 bg-grid overflow-hidden relative font-[Outfit]">
+        {/* ... (Same as before) ... */}
         <div className="absolute top-0 left-0 w-full h-full pointer-events-none">
              <div className="absolute top-20 left-20 w-72 h-72 bg-purple-600/20 rounded-full blur-[100px] animate-float"></div>
              <div className="absolute bottom-20 right-20 w-96 h-96 bg-blue-600/20 rounded-full blur-[100px] animate-float" style={{animationDelay: '2s'}}></div>
         </div>
         
         <ThreeDCard>
-          <div className="max-w-4xl w-full bg-slate-800/50 backdrop-blur-2xl border border-slate-700 p-12 rounded-3xl shadow-2xl relative z-10 text-center">
+          <div className="max-w-4xl w-full bg-slate-800/50 backdrop-blur-3xl border border-white/10 p-12 rounded-[2rem] shadow-2xl relative z-10 text-center ring-1 ring-white/5">
              <div className="mb-8 flex justify-center">
-                <div className="p-4 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl shadow-lg shadow-indigo-500/40">
+                <div className="p-4 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl shadow-lg shadow-indigo-500/40 animate-pulse-slow">
                     <Layers className="w-12 h-12 text-white" />
                 </div>
              </div>
-             <h1 className="text-4xl font-extrabold text-white mb-2 font-[Outfit]">
-               Select Exam Version
-             </h1>
-             <p className="text-slate-400 mb-8">Please choose the exam version assigned by your teacher.</p>
-             
-             <div className="flex flex-wrap justify-center gap-4">
+             <h1 className="text-5xl font-extrabold text-white mb-2 tracking-tight">Select Exam Version</h1>
+             <p className="text-slate-400 mb-10 text-lg">Please choose the exam version assigned by your teacher.</p>
+             <div className="flex flex-wrap justify-center gap-6">
                 {['A', 'B', 'C', 'D', 'E'].map((ver) => (
-                    <button
-                        key={ver}
-                        onClick={() => setSelectedVersion(ver)}
-                        className="group relative flex flex-col items-center justify-center w-32 h-32 p-4 bg-slate-900/50 border border-slate-700 rounded-2xl hover:bg-indigo-600/20 hover:border-indigo-500 transition-all duration-300"
-                    >
-                        <span className="text-3xl font-bold text-white mb-2 group-hover:scale-110 transition-transform">{ver}</span>
-                        <span className="text-xs text-slate-400 group-hover:text-indigo-200">Version {ver}</span>
+                    <button key={ver} onClick={() => setSelectedVersion(ver)} className="group relative flex flex-col items-center justify-center w-36 h-36 p-4 bg-slate-900/60 border border-slate-700/50 rounded-3xl hover:bg-indigo-600/20 hover:border-indigo-500 transition-all duration-300 hover:scale-110 hover:shadow-xl hover:shadow-indigo-500/20">
+                        <span className="text-4xl font-bold text-white mb-2 group-hover:scale-110 transition-transform">{ver}</span>
+                        <span className="text-xs text-slate-400 group-hover:text-indigo-200 uppercase tracking-wider font-semibold">Version</span>
                     </button>
                 ))}
              </div>
@@ -74,50 +168,44 @@ export default function App() {
 
   // 2. Start Screen
   if (!started) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#0f172a] text-white p-4 bg-grid overflow-hidden relative">
+     return (
+      <div className="min-h-screen flex items-center justify-center bg-[#0f172a] text-white p-4 bg-grid overflow-hidden relative font-[Outfit]">
+        {/* ... (Same as before) ... */}
         <div className="absolute top-0 left-0 w-full h-full pointer-events-none">
              <div className="absolute top-20 left-20 w-72 h-72 bg-purple-600/20 rounded-full blur-[100px] animate-float"></div>
              <div className="absolute bottom-20 right-20 w-96 h-96 bg-blue-600/20 rounded-full blur-[100px] animate-float" style={{animationDelay: '2s'}}></div>
         </div>
-        
         <ThreeDCard>
-          <div className="max-w-2xl w-full bg-slate-800/50 backdrop-blur-2xl border border-slate-700 p-12 rounded-3xl shadow-2xl transform transition-all hover:shadow-indigo-500/20 relative z-10 text-center">
+          <div className="max-w-3xl w-full bg-slate-800/50 backdrop-blur-3xl border border-white/10 p-12 rounded-[2.5rem] shadow-2xl transform transition-all hover:shadow-indigo-500/20 relative z-10 text-center">
              <div className="mb-8 flex justify-center">
-                <div className="p-4 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl shadow-lg shadow-indigo-500/40">
-                    <BookOpen className="w-12 h-12 text-white" />
+                <div className="p-5 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-3xl shadow-lg shadow-indigo-500/40">
+                    <BookOpen className="w-16 h-16 text-white" />
                 </div>
              </div>
-             <h1 className="text-5xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400 mb-2 font-[Outfit]">
-               Oxford Navigate
-             </h1>
-             <h2 className="text-2xl font-light text-indigo-300 mb-8">Pre-Intermediate Exam Platform</h2>
+             <h1 className="text-6xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-white via-indigo-200 to-slate-400 mb-4 tracking-tight drop-shadow-sm">Oxford Navigate</h1>
+             <h2 className="text-2xl font-medium text-indigo-300 mb-10 tracking-wide uppercase">Pre-Intermediate Exam Platform</h2>
              
-             <div className="grid grid-cols-2 gap-4 mb-8 text-left text-sm text-slate-300">
-               <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-700/50">
-                 <p className="text-slate-500 uppercase text-xs font-bold tracking-wider mb-1">Time Limit</p>
-                 <p className="font-semibold text-white">70 Minutes</p>
+             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-10 text-left text-sm text-slate-300">
+               <div className="bg-slate-900/60 p-5 rounded-2xl border border-slate-700/50 backdrop-blur-md">
+                 <p className="font-semibold text-white">70 Mins / Version {selectedVersion}</p>
+                 <p className="text-xs text-slate-400 mt-1">Pre-Intermediate</p>
                </div>
-               <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-700/50">
-                 <p className="text-slate-500 uppercase text-xs font-bold tracking-wider mb-1">Version</p>
-                 <p className="font-semibold text-white">Version {selectedVersion}</p>
+               <div className="bg-slate-900/60 p-5 rounded-2xl border border-slate-700/50 backdrop-blur-md">
+                 <p className="font-semibold text-white">Mr. Aziz</p>
+                 <p className="text-xs text-slate-400 mt-1">Head-Teacher</p>
+               </div>
+               <div className="bg-slate-900/60 p-5 rounded-2xl border border-slate-700/50 backdrop-blur-md">
+                 <p className="font-semibold text-white">Ms. Malika</p>
+                 <p className="text-xs text-slate-400 mt-1">Support</p>
                </div>
              </div>
 
-             <div className="flex flex-col gap-3">
-                <button 
-                    onClick={() => setStarted(true)}
-                    className="group relative inline-flex items-center justify-center px-8 py-4 font-bold text-white transition-all duration-200 bg-indigo-600 font-[Outfit] rounded-full hover:bg-indigo-700 hover:scale-105 focus:outline-none ring-offset-2 focus:ring-2 ring-indigo-400"
-                >
-                    <span className="mr-2 text-lg">Start Examination</span>
-                    <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+             <div className="flex flex-col gap-4 items-center">
+                <button onClick={() => setStarted(true)} className="group relative inline-flex items-center justify-center px-10 py-5 font-bold text-white transition-all duration-300 bg-indigo-600 rounded-full hover:bg-indigo-500 hover:scale-105 focus:outline-none ring-offset-4 focus:ring-2 ring-indigo-400 shadow-lg shadow-indigo-600/40">
+                    <span className="mr-3 text-xl tracking-wide">Start Examination</span>
+                    <ArrowRight className="w-6 h-6 group-hover:translate-x-1 transition-transform" />
                 </button>
-                <button 
-                    onClick={() => setSelectedVersion(null)}
-                    className="text-sm text-slate-500 hover:text-indigo-400 transition-colors"
-                >
-                    Change Version
-                </button>
+                <button onClick={() => setSelectedVersion(null)} className="text-sm text-slate-500 hover:text-white transition-colors">Change Version</button>
              </div>
           </div>
         </ThreeDCard>
@@ -125,113 +213,209 @@ export default function App() {
     );
   }
 
-  // 3. Finished Screen
-  if (finished) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#0f172a] text-white p-4 bg-grid">
-         <ThreeDCard>
-            <div className="max-w-xl w-full bg-slate-800/80 backdrop-blur-xl border border-green-500/30 p-10 rounded-3xl shadow-[0_0_50px_rgba(16,185,129,0.2)] text-center">
-                <div className="mb-6 flex justify-center">
-                    <div className="p-4 bg-green-500 rounded-full shadow-lg shadow-green-500/40 animate-bounce">
-                        <Check className="w-12 h-12 text-white" />
-                    </div>
-                </div>
-                <h2 className="text-4xl font-bold mb-4">Exam Submitted!</h2>
-                <p className="text-slate-300 mb-8">Thank you for completing the Pre-Intermediate Exam Workshop. Your answers have been recorded.</p>
-                
-                <div className="bg-slate-900/50 p-6 rounded-xl border border-slate-700 mb-6">
-                    <div className="flex justify-between items-center mb-2">
-                        <span className="text-slate-400">Time Remaining</span>
-                        <span className="text-white font-mono">{Math.floor(timeLeft / 60)}m {timeLeft % 60}s</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                         <span className="text-slate-400">Questions Answered</span>
-                         <span className="text-white font-mono">{Object.keys(answers).length}</span>
-                    </div>
-                    <div className="flex justify-between items-center mt-2 pt-2 border-t border-slate-700">
-                         <span className="text-slate-400">Version</span>
-                         <span className="text-white font-mono">{selectedVersion}</span>
-                    </div>
-                </div>
+  // 3. Remediation Mode
+  if (remediationMode) {
+      const allQuestions = (EXAM_VERSIONS[selectedVersion!] || []).flatMap(page => page.tasks.flatMap(t => t.questions));
+      const currentQId = mistakeQueue[currentMistakeIdx];
+      const question = allQuestions.find(q => q.id === currentQId);
 
-                <button onClick={() => window.location.reload()} className="text-indigo-400 hover:text-indigo-300 underline">Return to Home</button>
+      if (!question) return <div>Loading...</div>;
+
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-[#0f172a] text-white p-4 bg-grid font-[Outfit]">
+            <ThreeDCard>
+                <div className="max-w-3xl w-full bg-red-900/20 backdrop-blur-3xl border border-red-500/30 p-12 rounded-[2.5rem] shadow-2xl relative">
+                     <div className="flex items-center gap-4 mb-8 text-red-400">
+                        <AlertTriangle className="w-10 h-10" />
+                        <h2 className="text-3xl font-bold">Remediation Mode</h2>
+                     </div>
+                     <p className="text-slate-300 mb-8">You must correct this answer to proceed. ({mistakeQueue.length} remaining)</p>
+                     
+                     <div className="bg-slate-900/80 p-8 rounded-2xl border border-red-500/20 mb-8">
+                        <QuestionItem 
+                            question={question} 
+                            value={answers[question.id] || ''} 
+                            onChange={(val) => handleAnswer(question.id, val)} 
+                        />
+                     </div>
+
+                     <button 
+                        onClick={() => submitRemediationQuestion(question.id)}
+                        className="w-full py-4 bg-red-600 hover:bg-red-500 rounded-xl font-bold text-lg shadow-lg shadow-red-600/30 transition-all"
+                     >
+                        Check & Continue
+                     </button>
+                </div>
+            </ThreeDCard>
+        </div>
+      )
+  }
+
+  // 4. Analysis / Finished Screen
+  if (finished && analysis) {
+    const allQuestions = (EXAM_VERSIONS[selectedVersion!] || []).flatMap(page => page.tasks.flatMap(t => t.questions));
+
+    return (
+      <div className="min-h-screen bg-[#0f172a] text-white p-8 bg-grid font-[Outfit] pb-32">
+         <div className="max-w-5xl mx-auto space-y-8">
+            {/* Header Card */}
+            <ThreeDCard>
+                <div className="bg-slate-800/80 backdrop-blur-3xl border border-white/10 p-10 rounded-[2.5rem] text-center shadow-2xl relative overflow-hidden">
+                    <div className={`absolute top-0 left-0 w-full h-2 ${analysis.percentage >= 70 ? 'bg-emerald-500' : 'bg-amber-500'}`}></div>
+                    
+                    <h2 className="text-4xl font-bold mb-2">Examination Results</h2>
+                    <p className="text-slate-400 mb-8">Version {selectedVersion}</p>
+
+                    <div className="flex justify-center items-center gap-12 mb-8">
+                        <div className="text-center">
+                            <div className="text-6xl font-black bg-clip-text text-transparent bg-gradient-to-br from-white to-slate-400">{analysis.percentage}%</div>
+                            <div className="text-sm font-bold tracking-widest text-slate-500 uppercase mt-2">Score</div>
+                        </div>
+                        <div className="w-px h-24 bg-white/10"></div>
+                        <div className="text-center">
+                            <div className="text-6xl font-black bg-clip-text text-transparent bg-gradient-to-br from-white to-slate-400">{analysis.score}/{analysis.total}</div>
+                            <div className="text-sm font-bold tracking-widest text-slate-500 uppercase mt-2">Correct</div>
+                        </div>
+                    </div>
+
+                    <div className="bg-slate-900/50 p-6 rounded-2xl border border-white/5 inline-block">
+                        <p className="text-xl text-indigo-300 font-medium">"{analysis.feedback}"</p>
+                    </div>
+
+                    {analysis.mistakes.length > 0 && (
+                        <div className="mt-8">
+                            <button 
+                                onClick={startRemediation}
+                                className="flex items-center justify-center gap-3 px-8 py-4 bg-red-600 hover:bg-red-500 text-white rounded-full font-bold shadow-[0_10px_30px_rgba(220,38,38,0.4)] transition-all mx-auto animate-pulse"
+                            >
+                                <RefreshCw className="w-5 h-5" />
+                                Redo Mistakes ({analysis.mistakes.length})
+                            </button>
+                        </div>
+                    )}
+                </div>
+            </ThreeDCard>
+
+            {/* Detailed Breakdown */}
+            <div className="space-y-4">
+                <h3 className="text-2xl font-bold text-slate-300 ml-4">Detailed Breakdown</h3>
+                {allQuestions.map((q, idx) => {
+                    const isCorrect = !analysis.mistakes.includes(q.id);
+                    // Skip writing tasks in visual breakdown if needed, or show them as neutral
+                    if(q.type === QuestionType.WRITING) return null;
+
+                    return (
+                        <div key={q.id} className={`p-6 rounded-2xl border ${isCorrect ? 'bg-emerald-900/10 border-emerald-500/30' : 'bg-red-900/10 border-red-500/30'} flex flex-col md:flex-row gap-6 items-start md:items-center`}>
+                            <div className={`p-3 rounded-full shrink-0 ${isCorrect ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
+                                {isCorrect ? <Check size={24} /> : <XCircle size={24} />}
+                            </div>
+                            <div className="flex-grow">
+                                <p className="text-slate-400 text-xs uppercase tracking-wider font-bold mb-1">Question {idx + 1}</p>
+                                <p className="text-lg text-white font-medium mb-3">{q.prompt.replace(/_+/g, '___')}</p>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="bg-slate-900/50 p-3 rounded-lg border border-white/5">
+                                        <span className="text-xs text-slate-500 block mb-1">Your Answer</span>
+                                        <span className={`font-mono ${isCorrect ? 'text-emerald-300' : 'text-red-300'}`}>{answers[q.id] || '(Empty)'}</span>
+                                    </div>
+                                    {!isCorrect && (
+                                        <div className="bg-slate-900/50 p-3 rounded-lg border border-white/5">
+                                            <span className="text-xs text-slate-500 block mb-1">Correct Answer</span>
+                                            <span className="font-mono text-emerald-300">{q.correctAnswer}</span>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )
+                })}
             </div>
-         </ThreeDCard>
+         </div>
       </div>
     );
   }
 
+  // 5. Exam Interface (Same as before)
   const currentExamPages: ExamPageData[] = EXAM_VERSIONS[selectedVersion] || [];
   const currentPage = currentExamPages[currentPageIdx];
 
   return (
-    <div className="min-h-screen bg-[#0f172a] text-slate-200 font-[Outfit] pb-20 relative overflow-x-hidden selection:bg-indigo-500/30">
+    <div className="min-h-screen bg-[#0f172a] text-slate-200 font-[Outfit] pb-32 relative overflow-x-hidden selection:bg-indigo-500/30">
       
       {/* Background Ambience */}
       <div className="fixed inset-0 z-0 pointer-events-none">
-        <div className="absolute top-[-10%] right-[-10%] w-[500px] h-[500px] bg-purple-900/20 rounded-full blur-[120px] animate-pulse"></div>
-        <div className="absolute bottom-[-10%] left-[-10%] w-[600px] h-[600px] bg-indigo-900/20 rounded-full blur-[120px]" style={{animationDuration: '10s'}}></div>
+        <div className="absolute top-[-10%] right-[-10%] w-[600px] h-[600px] bg-purple-900/20 rounded-full blur-[120px] animate-pulse"></div>
+        <div className="absolute bottom-[-10%] left-[-10%] w-[700px] h-[700px] bg-indigo-900/20 rounded-full blur-[120px]" style={{animationDuration: '10s'}}></div>
+        <div className="absolute top-[40%] left-[50%] w-[400px] h-[400px] bg-cyan-900/10 rounded-full blur-[100px] translate-x-[-50%]"></div>
       </div>
 
-      <Timer timeLeft={timeLeft} setTimeLeft={setTimeLeft} onTimeUp={() => setFinished(true)} />
+      <Timer timeLeft={timeLeft} setTimeLeft={setTimeLeft} onTimeUp={handleFinish} />
 
       {/* Progress Bar */}
-      <div className="fixed top-0 left-0 w-full h-1 bg-slate-800 z-50">
+      <div className="fixed top-0 left-0 w-full h-1.5 bg-slate-900 z-50">
         <div 
-            className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500 ease-out shadow-[0_0_10px_rgba(99,102,241,0.5)]"
+            className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 transition-all duration-700 ease-out shadow-[0_0_15px_rgba(99,102,241,0.6)]"
             style={{ width: `${((currentPageIdx + 1) / currentExamPages.length) * 100}%` }}
         />
       </div>
 
-      <div className="container mx-auto px-4 py-8 relative z-10 max-w-5xl">
-        <div className="flex items-center justify-between mb-8">
+      <div className="container mx-auto px-4 py-12 relative z-10 max-w-5xl">
+        <div className="flex items-center justify-between mb-12">
             <div>
-                <h2 className="text-sm font-bold text-indigo-400 tracking-wider uppercase mb-1">Section {currentPageIdx + 1} of {currentExamPages.length}</h2>
-                <h1 className="text-3xl md:text-4xl font-extrabold text-white">{currentPage.title}</h1>
+                <div className="flex items-center gap-3 mb-2">
+                    <span className="px-3 py-1 bg-indigo-500/20 text-indigo-300 rounded-full text-xs font-bold tracking-widest uppercase border border-indigo-500/30">
+                        Section {currentPageIdx + 1} / {currentExamPages.length}
+                    </span>
+                    <span className="text-xs text-slate-500 font-mono hidden md:inline-block">ID: {currentPage.id}</span>
+                </div>
+                <h1 className="text-4xl md:text-5xl font-extrabold text-white tracking-tight">{currentPage.title}</h1>
             </div>
-            <div className="hidden md:block">
-                 <div className="text-right text-xs text-slate-500 font-mono">ID: {currentPage.id}</div>
-                 <div className="text-right text-xs text-indigo-400 font-mono mt-1">Ver: {selectedVersion}</div>
+            <div className="hidden md:block text-right">
+                 <div className="text-3xl font-bold text-white/10 font-[Outfit]">VER {selectedVersion}</div>
             </div>
         </div>
 
         <ThreeDCard className="w-full">
-            <div className="space-y-8">
+            <div className="space-y-10">
                 {currentPage.tasks.map((task, tIdx) => (
-                    <div key={task.id} className="bg-slate-800/40 backdrop-blur-md border border-slate-700/50 rounded-2xl p-6 md:p-8 shadow-xl hover:bg-slate-800/60 transition-colors">
-                        <div className="flex items-start gap-4 mb-6 border-b border-slate-700/50 pb-4">
-                            <div className="bg-indigo-500/20 p-2 rounded-lg text-indigo-300">
-                                {task.id.includes('writing') ? <PenTool size={20} /> : <Layout size={20} />}
+                    <div key={task.id} className="group bg-slate-800/40 backdrop-blur-xl border border-white/5 rounded-[2rem] p-8 md:p-10 shadow-xl hover:bg-slate-800/50 hover:border-white/10 transition-all duration-500 relative overflow-hidden">
+                        {/* Glow effect on hover */}
+                        <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"></div>
+                        
+                        <div className="relative z-10">
+                            <div className="flex items-start gap-5 mb-8 border-b border-white/5 pb-6">
+                                <div className="bg-gradient-to-br from-indigo-500 to-purple-600 p-3 rounded-2xl shadow-lg shadow-indigo-900/20 text-white shrink-0">
+                                    {task.id.includes('writing') ? <PenTool size={24} /> : <Layout size={24} />}
+                                </div>
+                                <div>
+                                    <h3 className="text-2xl font-bold text-white mb-2 tracking-tight">{task.title}</h3>
+                                    <p className="text-indigo-200 text-base font-medium">{task.instruction}</p>
+                                </div>
                             </div>
-                            <div>
-                                <h3 className="text-xl font-bold text-white mb-1">{task.title}</h3>
-                                <p className="text-indigo-200 text-sm">{task.instruction}</p>
-                            </div>
-                        </div>
 
-                        <div className="space-y-6">
-                            {task.questions.map((q) => (
-                                <QuestionItem 
-                                    key={q.id} 
-                                    question={q} 
-                                    value={answers[q.id] || ''} 
-                                    onChange={(val) => handleAnswer(q.id, val)} 
-                                />
-                            ))}
+                            <div className="space-y-8">
+                                {task.questions.map((q) => (
+                                    <QuestionItem 
+                                        key={q.id} 
+                                        question={q} 
+                                        value={answers[q.id] || ''} 
+                                        onChange={(val) => handleAnswer(q.id, val)} 
+                                    />
+                                ))}
+                            </div>
                         </div>
                     </div>
                 ))}
             </div>
         </ThreeDCard>
 
-        <div className="mt-12 flex justify-between items-center">
+        <div className="mt-16 flex justify-between items-center relative z-20">
             <button
                 disabled={currentPageIdx === 0}
                 onClick={() => {
-                    window.scrollTo(0,0);
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
                     setCurrentPageIdx(prev => prev - 1);
                 }}
-                className={`flex items-center px-6 py-3 rounded-xl transition-all ${currentPageIdx === 0 ? 'opacity-0 pointer-events-none' : 'bg-slate-800 hover:bg-slate-700 text-white'}`}
+                className={`flex items-center px-8 py-4 rounded-full transition-all duration-300 font-semibold ${currentPageIdx === 0 ? 'opacity-0 pointer-events-none' : 'bg-slate-800 hover:bg-slate-700 text-white border border-slate-700'}`}
             >
                 <ArrowLeft className="mr-2 w-5 h-5" /> Previous
             </button>
@@ -239,17 +423,21 @@ export default function App() {
             {currentPageIdx < currentExamPages.length - 1 ? (
                 <button
                     onClick={() => {
-                        window.scrollTo(0,0);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
                         setCurrentPageIdx(prev => prev + 1);
                     }}
-                    className="flex items-center px-8 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold shadow-lg shadow-indigo-900/50 hover:scale-105 transition-all"
+                    className="flex items-center px-10 py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full font-bold shadow-[0_10px_30px_rgba(79,70,229,0.4)] hover:shadow-[0_10px_40px_rgba(79,70,229,0.5)] hover:scale-105 transition-all duration-300"
                 >
                     Next Section <ArrowRight className="ml-2 w-5 h-5" />
                 </button>
             ) : (
                 <button
-                    onClick={handleSubmit}
-                    className="flex items-center px-8 py-3 bg-green-600 hover:bg-green-500 text-white rounded-xl font-bold shadow-lg shadow-green-900/50 hover:scale-105 transition-all"
+                    onClick={() => {
+                         if (window.confirm("Are you sure you want to finish the exam?")) {
+                             handleFinish();
+                         }
+                    }}
+                    className="flex items-center px-10 py-4 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-400 hover:to-green-500 text-white rounded-full font-bold shadow-[0_10px_30px_rgba(16,185,129,0.4)] hover:shadow-[0_10px_40px_rgba(16,185,129,0.5)] hover:scale-105 transition-all duration-300"
                 >
                     Submit Exam <Save className="ml-2 w-5 h-5" />
                 </button>
@@ -267,22 +455,26 @@ const QuestionItem: React.FC<{ question: Question; value: string; onChange: (val
     if (question.type === QuestionType.MCQ) {
         return (
             <div className="animate-fade-in-up">
-                <p className="text-lg mb-3 text-slate-100 font-medium leading-relaxed">{question.prompt}</p>
-                <div className="flex flex-wrap gap-3">
+                <p className="text-xl mb-4 text-slate-100 font-medium leading-relaxed tracking-wide">{question.prompt}</p>
+                <div className="flex flex-wrap gap-4">
                     {question.options?.map((opt) => (
                         <button
                             key={opt}
                             onClick={() => onChange(opt)}
                             className={`
-                                relative px-4 py-2 rounded-lg border text-sm font-semibold transition-all duration-200 transform hover:-translate-y-1 active:translate-y-0
+                                relative px-6 py-3 rounded-xl border-2 text-sm md:text-base font-bold transition-all duration-200 transform hover:-translate-y-1 active:translate-y-0
                                 ${value === opt 
-                                    ? 'bg-indigo-600 border-indigo-500 text-white shadow-[0_4px_12px_rgba(79,70,229,0.4)]' 
-                                    : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-indigo-500/50 hover:text-indigo-300'
+                                    ? 'bg-indigo-600 border-indigo-500 text-white shadow-[0_8px_20px_rgba(79,70,229,0.3)] ring-2 ring-indigo-400 ring-offset-2 ring-offset-slate-900' 
+                                    : 'bg-slate-900/50 border-slate-700/50 text-slate-400 hover:border-indigo-500/50 hover:text-indigo-300 hover:bg-slate-800'
                                 }
                             `}
                         >
                             {opt}
-                            {value === opt && <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-400 rounded-full border-2 border-slate-800"></div>}
+                            {value === opt && (
+                                <div className="absolute -top-2 -right-2 w-5 h-5 bg-emerald-500 rounded-full border-2 border-slate-800 flex items-center justify-center">
+                                    <Check size={12} className="text-white" />
+                                </div>
+                            )}
                         </button>
                     ))}
                 </div>
@@ -291,20 +483,62 @@ const QuestionItem: React.FC<{ question: Question; value: string; onChange: (val
     }
 
     // Fill Blank / Sentence Builder
+    // Advanced handling for multiple blanks (regex split)
     if (question.type === QuestionType.FILL_BLANK || question.type === QuestionType.SENTENCE_BUILDER) {
-        // Simple regex replace for visual cues if prompt has underscores
-        const parts = question.prompt.split('_______');
+        // Look for underscores (flexible length)
+        const parts = question.prompt.split(/(_+)/);
+        const hasGaps = parts.length > 1 && question.prompt.match(/_+/);
         
+        // If gaps detected, render inline inputs
+        if (hasGaps) {
+            // Split values by pipe | for storage
+            const currentValues = value ? value.split('|').map(s => s.trim()) : [];
+            
+            // Map segments to match input indices
+            let inputCounter = 0;
+
+            const handleChange = (idx: number, val: string) => {
+                const newValues = [...currentValues];
+                // Ensure array is filled up to this index
+                while(newValues.length <= idx) newValues.push('');
+                newValues[idx] = val;
+                onChange(newValues.join('|'));
+            }
+
+            return (
+                <div className="bg-slate-900/30 p-5 rounded-2xl border border-slate-700/30 text-lg leading-loose text-slate-200">
+                    {parts.map((part, i) => {
+                        if (part.match(/_+/)) {
+                            const currentIndex = inputCounter++;
+                            return (
+                                <input
+                                    key={i}
+                                    type="text"
+                                    value={currentValues[currentIndex] || ''}
+                                    onChange={(e) => handleChange(currentIndex, e.target.value)}
+                                    className="mx-2 bg-slate-950/80 border-b-2 border-indigo-500/50 text-center text-indigo-300 font-bold w-32 md:w-40 px-2 py-1 focus:outline-none focus:border-indigo-400 focus:bg-indigo-900/20 transition-all rounded-t-md inline-block"
+                                    placeholder="type here"
+                                />
+                            );
+                        }
+                        return <span key={i} dangerouslySetInnerHTML={{ __html: part }} />;
+                    })}
+                    {question.subPrompt && <p className="text-sm text-indigo-400 mt-3 font-medium italic flex items-center gap-2"><Star size={12}/> {question.subPrompt}</p>}
+                </div>
+            );
+        }
+
+        // Fallback for "SENTENCE_BUILDER" or standard inputs without underscores
         return (
-            <div className="bg-slate-900/30 p-4 rounded-xl border border-slate-700/30">
-                <label className="block text-slate-300 mb-2 font-medium">{question.prompt.replace(/_______/g, '___')}</label>
-                {question.subPrompt && <p className="text-xs text-slate-500 mb-2 italic">{question.subPrompt}</p>}
+            <div className="bg-slate-900/30 p-5 rounded-2xl border border-slate-700/30 hover:border-indigo-500/30 transition-colors">
+                <label className="block text-xl text-slate-200 mb-3 font-medium tracking-wide">{question.prompt}</label>
+                {question.subPrompt && <p className="text-sm text-indigo-400 mb-3 italic">{question.subPrompt}</p>}
                 <input 
                     type="text" 
                     value={value} 
                     onChange={(e) => onChange(e.target.value)}
-                    placeholder="Type answer here..."
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-indigo-300 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all font-mono"
+                    placeholder="Type your answer here..."
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-5 py-4 text-indigo-300 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all font-mono shadow-inner"
                 />
             </div>
         );
@@ -312,40 +546,63 @@ const QuestionItem: React.FC<{ question: Question; value: string; onChange: (val
 
     // Dropdown (Task 23)
     if (question.type === QuestionType.DROPDOWN) {
-        const parts = question.prompt.split('__________');
+        // Robust split by underscores
+        const parts = question.prompt.split(/_+/);
         return (
-            <div className="flex items-center flex-wrap gap-2 text-lg">
+            <div className="flex items-center flex-wrap gap-3 text-xl bg-slate-900/20 p-4 rounded-xl border border-white/5">
                <span>{parts[0]}</span>
-               <select 
-                 value={value} 
-                 onChange={(e) => onChange(e.target.value)}
-                 className="bg-slate-950 border border-slate-600 text-indigo-400 rounded-lg px-3 py-1 focus:outline-none focus:border-indigo-500 appearance-none cursor-pointer hover:bg-slate-900"
-               >
-                 <option value="" disabled>Select...</option>
-                 {question.options?.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-               </select>
-               <span>{parts[1]}</span>
+               <div className="relative inline-block">
+                   <select 
+                     value={value} 
+                     onChange={(e) => onChange(e.target.value)}
+                     className="appearance-none bg-slate-950 border-2 border-indigo-500/50 text-indigo-300 font-bold rounded-lg pl-4 pr-10 py-2 focus:outline-none focus:border-indigo-400 focus:shadow-[0_0_15px_rgba(99,102,241,0.3)] cursor-pointer hover:bg-slate-900 transition-all"
+                   >
+                     <option value="" disabled>Select...</option>
+                     {question.options?.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                   </select>
+                   <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-indigo-400">
+                      <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+                   </div>
+               </div>
+               <span>{parts[1] || ''}</span>
             </div>
         )
     }
 
     // Writing
     if (question.type === QuestionType.WRITING) {
+        const wordCount = value.trim().split(/\s+/).filter(w => w.length > 0).length;
         return (
             <div className="space-y-4">
-                <div className="bg-slate-800 p-4 rounded-lg border-l-4 border-indigo-500">
-                    <p className="text-slate-300 italic">{question.prompt}</p>
+                <div className="bg-indigo-900/20 p-6 rounded-2xl border border-indigo-500/30 flex gap-4">
+                    <BookOpen className="text-indigo-400 shrink-0 mt-1" />
+                    <div>
+                         <h4 className="font-bold text-indigo-300 mb-1">Essay Prompt</h4>
+                         <p className="text-slate-300 italic text-lg leading-relaxed">{question.prompt}</p>
+                    </div>
                 </div>
-                <textarea
-                    value={value}
-                    onChange={(e) => onChange(e.target.value)}
-                    placeholder={question.subPrompt}
-                    rows={12}
-                    className="w-full bg-slate-950/50 border border-slate-700 rounded-xl p-5 text-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-900/50 transition-all resize-none font-sans leading-relaxed"
-                />
-                <div className="flex justify-between text-sm text-slate-500">
-                    <span>Target: 80-100 words</span>
-                    <span>Current: {value.trim().split(/\s+/).filter(w => w.length > 0).length} words</span>
+                <div className="relative">
+                    <textarea
+                        value={value}
+                        onChange={(e) => onChange(e.target.value)}
+                        placeholder={question.subPrompt}
+                        rows={14}
+                        className="w-full bg-slate-950/50 border border-slate-700 rounded-2xl p-6 text-lg text-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-900/50 transition-all resize-none font-serif leading-relaxed shadow-inner"
+                    />
+                    <div className="absolute bottom-4 right-4 text-xs font-mono text-slate-500 bg-slate-900/80 px-2 py-1 rounded">
+                        Autosave active
+                    </div>
+                </div>
+                <div className="flex justify-between items-center bg-slate-900/50 p-3 rounded-xl border border-slate-800">
+                    <div className="flex items-center gap-2">
+                        <span className="text-sm text-slate-400">Target Length:</span>
+                        <span className="text-white font-bold">80-100 words</span>
+                    </div>
+                    <div className={`flex items-center gap-2 ${wordCount >= 80 && wordCount <= 120 ? 'text-green-400' : 'text-orange-400'}`}>
+                        <span className="text-sm">Current:</span>
+                        <span className="text-xl font-bold">{wordCount}</span>
+                        <span className="text-xs uppercase font-bold tracking-wider">words</span>
+                    </div>
                 </div>
             </div>
         );
