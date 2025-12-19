@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 
 interface ThreeDCardProps {
   children: React.ReactNode;
@@ -8,9 +8,20 @@ interface ThreeDCardProps {
 const ThreeDCard: React.FC<ThreeDCardProps> = ({ children, className = '' }) => {
   const cardRef = useRef<HTMLDivElement>(null);
   const [rotation, setRotation] = useState({ x: 0, y: 0 });
+  const [isTouch, setIsTouch] = useState(false);
+
+  useEffect(() => {
+    // Check for touch capability
+    const checkTouch = () => {
+      setIsTouch(window.matchMedia("(pointer: coarse)").matches);
+    };
+    checkTouch();
+    window.addEventListener('resize', checkTouch);
+    return () => window.removeEventListener('resize', checkTouch);
+  }, []);
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!cardRef.current) return;
+    if (isTouch || !cardRef.current) return;
 
     const card = cardRef.current;
     const rect = card.getBoundingClientRect();
@@ -20,8 +31,9 @@ const ThreeDCard: React.FC<ThreeDCardProps> = ({ children, className = '' }) => 
     const centerX = rect.width / 2;
     const centerY = rect.height / 2;
 
-    const rotateX = ((y - centerY) / centerY) * -2; // Max 2 deg rotation
-    const rotateY = ((x - centerX) / centerX) * 2;
+    // Reduce rotation intensity for better readability
+    const rotateX = ((y - centerY) / centerY) * -1.5; 
+    const rotateY = ((x - centerX) / centerX) * 1.5;
 
     setRotation({ x: rotateX, y: rotateY });
   };
@@ -31,14 +43,14 @@ const ThreeDCard: React.FC<ThreeDCardProps> = ({ children, className = '' }) => 
   };
 
   return (
-    <div className="perspective-2000 py-10">
+    <div className="perspective-2000 py-4 md:py-10 w-full flex justify-center">
       <div
         ref={cardRef}
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
-        className={`transition-transform duration-200 ease-out preserve-3d ${className}`}
+        className={`transition-transform duration-200 ease-out preserve-3d w-full max-w-full ${className}`}
         style={{
-          transform: `rotateX(${rotation.x}deg) rotateY(${rotation.y}deg)`,
+          transform: isTouch ? 'none' : `rotateX(${rotation.x}deg) rotateY(${rotation.y}deg)`,
         }}
       >
         {children}
