@@ -3,10 +3,12 @@ import { EXAM_VERSIONS } from './constants';
 import { AnswersState, Question, QuestionType, TaskSection, ExamPageData, AnalysisResult } from './types';
 import Timer from './components/Timer';
 import ThreeDCard from './components/ThreeDCard';
-import { ArrowRight, ArrowLeft, CheckCircle, Save, BookOpen, PenTool, Layout, Check, Layers, User, Star, AlertTriangle, RefreshCw, XCircle, Lock } from 'lucide-react';
+import { ArrowRight, ArrowLeft, CheckCircle, Save, BookOpen, PenTool, Layout, Check, Layers, User, Star, AlertTriangle, RefreshCw, XCircle, Lock, KeyRound } from 'lucide-react';
 
 const TOTAL_TIME = 70 * 60; // 70 minutes
 const PASSING_THRESHOLD = 95; // Percent needed to unlock next version
+const EXAM_PASSWORD = "0890";
+const SESSION_KEY = "oxford_active_session";
 
 // ------------------- WRITING ALGORITHM -------------------
 
@@ -131,7 +133,7 @@ const analyzeExam = (answers: AnswersState, questions: Question[]): AnalysisResu
 // ------------------- COMPONENT -------------------
 
 export default function App() {
-  // Load unlocked versions from localStorage
+  // Load unlocked versions from localStorage (Persistent Settings)
   const [unlockedVersions, setUnlockedVersions] = useState<string[]>(() => {
       try {
           const saved = localStorage.getItem('oxford_unlocked');
@@ -141,18 +143,70 @@ export default function App() {
       }
   });
 
-  const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
-  const [started, setStarted] = useState(false);
-  const [currentPageIdx, setCurrentPageIdx] = useState(0);
-  const [answers, setAnswers] = useState<AnswersState>({});
-  const [timeLeft, setTimeLeft] = useState(TOTAL_TIME);
-  const [finished, setFinished] = useState(false);
+  // Load Session State (Auto-save/Recovery)
+  const getSessionData = () => {
+    try {
+        const savedSession = localStorage.getItem(SESSION_KEY);
+        if (savedSession) {
+            return JSON.parse(savedSession);
+        }
+    } catch (e) { console.error("Session load error", e); }
+    return null;
+  };
+
+  const session = getSessionData();
+
+  const [selectedVersion, setSelectedVersion] = useState<string | null>(session?.selectedVersion || null);
+  const [started, setStarted] = useState(session?.started || false);
+  const [currentPageIdx, setCurrentPageIdx] = useState(session?.currentPageIdx || 0);
+  const [answers, setAnswers] = useState<AnswersState>(session?.answers || {});
+  const [timeLeft, setTimeLeft] = useState(session?.timeLeft || TOTAL_TIME);
+  const [finished, setFinished] = useState(false); // Finished state is not persisted to force submission
+  const [passwordInput, setPasswordInput] = useState('');
+  const [passwordError, setPasswordError] = useState(false);
   
   // Remediation State
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [remediationMode, setRemediationMode] = useState(false);
   const [mistakeQueue, setMistakeQueue] = useState<string[]>([]);
   const [currentMistakeIdx, setCurrentMistakeIdx] = useState(0);
+
+  // --- PERSISTENCE & SECURITY HOOKS ---
+
+  // 1. Prevent Refresh/Close
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+        if (started && !finished) {
+            e.preventDefault();
+            e.returnValue = ''; // Required for Chrome
+            return ''; // Required for legacy browsers
+        }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [started, finished]);
+
+  // 2. Auto-Save Session
+  useEffect(() => {
+      if (started && !finished) {
+          const stateToSave = {
+              selectedVersion,
+              started,
+              currentPageIdx,
+              answers,
+              timeLeft
+          };
+          localStorage.setItem(SESSION_KEY, JSON.stringify(stateToSave));
+      }
+  }, [started, finished, selectedVersion, currentPageIdx, answers, timeLeft]);
+
+  // 3. Clear Session on Finish
+  useEffect(() => {
+      if (finished) {
+          localStorage.removeItem(SESSION_KEY);
+      }
+  }, [finished]);
+
 
   const handleAnswer = (id: string, value: string) => {
     setAnswers(prev => ({ ...prev, [id]: value }));
@@ -169,6 +223,15 @@ export default function App() {
               localStorage.setItem('oxford_unlocked', JSON.stringify(newUnlocked));
           }
       }
+  };
+
+  const handleStartExam = () => {
+    if (passwordInput === EXAM_PASSWORD) {
+        setStarted(true);
+        setPasswordError(false);
+    } else {
+        setPasswordError(true);
+    }
   };
 
   const handleFinish = () => {
@@ -289,7 +352,7 @@ export default function App() {
     )
   }
 
-  // 2. Start Screen
+  // 2. Start Screen (With Password)
   if (!started) {
      return (
       <div className="min-h-screen flex items-center justify-center bg-[#0f172a] text-white p-4 bg-grid overflow-hidden relative font-[Outfit]">
@@ -323,12 +386,26 @@ export default function App() {
                </div>
              </div>
 
-             <div className="flex flex-col gap-4 items-center">
-                <button onClick={() => setStarted(true)} className="group relative w-full md:w-auto inline-flex items-center justify-center px-8 md:px-10 py-4 md:py-5 font-bold text-white transition-all duration-300 bg-indigo-600 rounded-full hover:bg-indigo-500 hover:scale-105 focus:outline-none ring-offset-4 focus:ring-2 ring-indigo-400 shadow-lg shadow-indigo-600/40 text-lg">
+             <div className="flex flex-col gap-4 items-center w-full max-w-md mx-auto">
+                <div className="w-full relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
+                        <KeyRound size={20} />
+                    </div>
+                    <input 
+                        type="password" 
+                        value={passwordInput}
+                        onChange={(e) => setPasswordInput(e.target.value)}
+                        placeholder="Enter Exam Password"
+                        className={`w-full bg-slate-950 border ${passwordError ? 'border-red-500' : 'border-slate-700'} rounded-xl px-10 py-4 text-white text-center tracking-[0.5em] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all font-mono text-lg placeholder:font-sans placeholder:tracking-normal placeholder:text-slate-600`}
+                    />
+                    {passwordError && <p className="text-red-400 text-xs mt-2 absolute -bottom-6 w-full">Incorrect Password. Ask your teacher.</p>}
+                </div>
+
+                <button onClick={handleStartExam} className="group mt-4 relative w-full inline-flex items-center justify-center px-8 md:px-10 py-4 md:py-5 font-bold text-white transition-all duration-300 bg-indigo-600 rounded-full hover:bg-indigo-500 hover:scale-105 focus:outline-none ring-offset-4 focus:ring-2 ring-indigo-400 shadow-lg shadow-indigo-600/40 text-lg">
                     <span className="mr-3 tracking-wide">Start Examination</span>
                     <ArrowRight className="w-6 h-6 group-hover:translate-x-1 transition-transform" />
                 </button>
-                <button onClick={() => setSelectedVersion(null)} className="text-sm text-slate-500 hover:text-white transition-colors">Change Version</button>
+                <button onClick={() => setSelectedVersion(null)} className="text-sm text-slate-500 hover:text-white transition-colors mt-2">Change Version</button>
              </div>
           </div>
         </ThreeDCard>
